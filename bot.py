@@ -12,7 +12,28 @@ CHAT_ID        = os.environ["CHAT_ID"]
 SEND_HOUR      = int(os.environ.get("SEND_HOUR", "7"))
 TZ             = ZoneInfo("Asia/Jerusalem")
 
-GEMINI_URL  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+async def gemini(prompt: str) -> str:
+    s = STATE
+    full = SYSTEM
+    if s.get("watchlist"):
+        full += f"\nרשימת מעקב: {', '.join(s['watchlist'])}"
+    full += f"\nStop Loss מקסימלי: {s.get('stop_loss', 7)}%"
+
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": full + "\n\n" + prompt}]
+            }
+        ],
+        "generationConfig": {"maxOutputTokens": 700, "temperature": 0.4}
+    }
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(GEMINI_URL, json=body)
+        data = r.json()
+        if "candidates" not in data:
+            return f"שגיאה: {data.get('error', {}).get('message', 'unknown')}"
+        return data["candidates"][0]["content"]["parts"][0]["text"]"
 PODCAST_RSS = "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Ffeeds.buzzsprout.com%2F2299778.rss"
 YAHOO_URL   = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=2d"
 
