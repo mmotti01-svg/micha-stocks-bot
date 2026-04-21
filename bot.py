@@ -14,26 +14,24 @@ TZ             = ZoneInfo("Asia/Jerusalem")
 
 async def gemini(prompt: str) -> str:
     s = STATE
-    full = SYSTEM
+    full_prompt = SYSTEM
     if s.get("watchlist"):
-        full += f"\nרשימת מעקב: {', '.join(s['watchlist'])}"
-    full += f"\nStop Loss מקסימלי: {s.get('stop_loss', 7)}%"
+        full_prompt += f"\nרשימת מעקב: {', '.join(s['watchlist'])}"
+    full_prompt += f"\nStop Loss: {s.get('stop_loss', 7)}%"
+    full_prompt += f"\n\n{prompt}"
 
     body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": full + "\n\n" + prompt}]
-            }
-        ],
+        "contents": [{"parts": [{"text": full_prompt}]}],
         "generationConfig": {"maxOutputTokens": 700, "temperature": 0.4}
     }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(GEMINI_URL, json=body)
+        r = await c.post(url, json=body)
         data = r.json()
         if "candidates" not in data:
-            return f"שגיאה מ-Gemini: {json.dumps(data, ensure_ascii=False)}"
-        return data["candidates"][0]["content"]["parts"][0]["text"]"
+            err = data.get("error", {})
+            return f"קוד שגיאה: {err.get('code','')} | {err.get('message','')}"
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 PODCAST_RSS = "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Ffeeds.buzzsprout.com%2F2299778.rss"
 YAHOO_URL   = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=2d"
 
