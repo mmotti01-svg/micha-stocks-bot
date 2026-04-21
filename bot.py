@@ -12,26 +12,6 @@ CHAT_ID        = os.environ["CHAT_ID"]
 SEND_HOUR      = int(os.environ.get("SEND_HOUR", "7"))
 TZ             = ZoneInfo("Asia/Jerusalem")
 
-async def gemini(prompt: str) -> str:
-    s = STATE
-    full_prompt = SYSTEM
-    if s.get("watchlist"):
-        full_prompt += f"\nרשימת מעקב: {', '.join(s['watchlist'])}"
-    full_prompt += f"\nStop Loss: {s.get('stop_loss', 7)}%"
-    full_prompt += f"\n\n{prompt}"
-
-    body = {
-        "contents": [{"parts": [{"text": full_prompt}]}],
-        "generationConfig": {"maxOutputTokens": 700, "temperature": 0.4}
-    }
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(url, json=body)
-        data = r.json()
-        if "candidates" not in data:
-            err = data.get("error", {})
-            return f"קוד שגיאה: {err.get('code','')} | {err.get('message','')}"
-        return data["candidates"][0]["content"]["parts"][0]["text"]
 PODCAST_RSS = "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Ffeeds.buzzsprout.com%2F2299778.rss"
 YAHOO_URL   = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=2d"
 
@@ -66,30 +46,35 @@ SYSTEM = """אתה סוכן מניות מנוסה המבוסס על האקדמי
 - שיטת מיכו: מניה מעל MA150 במגמה עולה = שוקל. מתחת = לא נוגע.
 - לא לתפוס סכין נופלת. מזומן הוא גם פוזיציה.
 
-כתוב בעברית, ברור וקצר. בסוף: ⚠️ חינוך פיננסי בלבד."""
+כתוב בעברית, ברור וקצר. בסוף: אזהרה: חינוך פיננסי בלבד."""
 
 # ── Gemini ───────────────────────────────────────────────────
 async def gemini(prompt: str) -> str:
     s = STATE
-    full = SYSTEM
+    full_prompt = SYSTEM
     if s.get("watchlist"):
-        full += f"\nרשימת מעקב: {', '.join(s['watchlist'])}"
-    full += f"\nStop Loss מקסימלי: {s.get('stop_loss', 7)}%"
+        full_prompt += f"\nרשימת מעקב: {', '.join(s['watchlist'])}"
+    full_prompt += f"\nStop Loss מקסימלי: {s.get('stop_loss', 7)}%"
     if s.get("extra_context"):
-        full += f"\n{s['extra_context']}"
+        full_prompt += f"\n{s['extra_context']}"
+    full_prompt += f"\n\n{prompt}"
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
     body = {
-        "system_instruction": {"parts": [{"text": full}]},
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"parts": [{"text": full_prompt}]}],
         "generationConfig": {"maxOutputTokens": 700, "temperature": 0.4}
     }
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post(GEMINI_URL, json=body)
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        r = await c.post(url, json=body)
+        data = r.json()
+        if "candidates" not in data:
+            err = data.get("error", {})
+            return f"שגיאה מ-Gemini: {err.get('code','')} | {err.get('message', str(data))}"
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
 # ── נתוני שוק ───────────────────────────────────────────────
 async def fetch_market():
-    tickers = [("SPY","S&P 500"), ("QQQ","נאסד\"ק"), ("GLD","זהב"), ("USO","נפט")]
+    tickers = [("SPY", "S&P 500"), ("QQQ", "נאסד\"ק"), ("GLD", "זהב"), ("USO", "נפט")]
     lines = []
     async with httpx.AsyncClient(timeout=10) as c:
         for sym, label in tickers:
@@ -112,11 +97,17 @@ async def fetch_episode():
             r    = await c.get(PODCAST_RSS)
             item = r.json()["items"][0]
             desc = re.sub(r'<[^>]+>', '', item.get("description", ""))[:500]
-            return {"title": item.get("title",""), "desc": desc,
-                    "link": item.get("link","https://youtube.com/@Micha.Stocks/videos")}
+            return {
+                "title": item.get("title", ""),
+                "desc": desc,
+                "link": item.get("link", "https://youtube.com/@Micha.Stocks/videos")
+            }
         except Exception:
-            return {"title": "סרטון בוקר — מיכה סטוקס",
-                    "desc": "", "link": "https://youtube.com/@Micha.Stocks/videos"}
+            return {
+                "title": "סרטון בוקר — מיכה סטוקס",
+                "desc": "",
+                "link": "https://youtube.com/@Micha.Stocks/videos"
+            }
 
 # ── סיכום בוקר ──────────────────────────────────────────────
 async def morning_digest(bot: Bot):
@@ -127,10 +118,9 @@ async def morning_digest(bot: Bot):
             f"סכם את הסרטון הבא ב-4 נקודות קצרות:\n"
             f"כותרת: {ep['title']}\nתיאור: {ep['desc']}"
         )
-        wl = ", ".join(STATE["watchlist"])
+        wl   = ", ".join(STATE["watchlist"])
         recs = await gemini(
-            f"תן המלצה קצרה (שורה אחת לכל אחת) על: {wl}. "
-            f"מצב שוק: {market}"
+            f"תן המלצה קצרה (שורה אחת לכל אחת) על: {wl}. מצב שוק: {market}"
         )
         now = datetime.now(TZ).strftime("%d/%m/%Y %H:%M")
         msg = (
@@ -139,37 +129,36 @@ async def morning_digest(bot: Bot):
             f"📊 *מצב שוק*\n{market}\n\n"
             f"━━━━━━━━━━━━━━\n"
             f"🎬 *{ep['title']}*\n\n{summary}\n\n"
-            f"[▶ לסרטון]({ep['link']})\n\n"
+            f"[לסרטון]({ep['link']})\n\n"
             f"━━━━━━━━━━━━━━\n"
             f"⭐ *רשימת מעקב*\n{recs}\n\n"
-            f"_⚠️ חינוך פיננסי בלבד_"
+            f"_אזהרה: חינוך פיננסי בלבד_"
         )
         await bot.send_message(CHAT_ID, msg, parse_mode="Markdown",
                                disable_web_page_preview=True)
     except Exception as e:
         log.error(f"שגיאה בסיכום בוקר: {e}")
-        await bot.send_message(CHAT_ID, f"⚠️ שגיאה בסיכום בוקר: {e}")
+        await bot.send_message(CHAT_ID, f"שגיאה בסיכום בוקר: {e}")
 
 # ── פקודות ──────────────────────────────────────────────────
 async def cmd_start(u: Update, _):
     await u.message.reply_text(
-        "📈 *סוכן מניות | מיכה סטוקס*\n\n"
+        "📈 סוכן מניות | מיכה סטוקס\n\n"
         "הפקודות:\n"
-        "• /morning — סיכום בוקר + שוק\n"
-        "• /analyze TSLA — ניתוח מניה\n"
-        "• /market — מצב שוק עכשיו\n"
-        "• /watchlist — ניתוח רשימת מעקב\n"
-        "• /add NVDA — הוסף לרשימה\n"
-        "• /remove NVDA — הסר מרשימה\n"
-        "• /setstop 7 — עדכן Stop Loss\n"
-        "• /settings — הגדרות נוכחיות\n\n"
-        "או פשוט כתוב כל שאלה חופשית 💬\n\n"
-        "_⚠️ חינוך פיננסי בלבד_",
-        parse_mode="Markdown"
+        "/morning — סיכום בוקר + שוק\n"
+        "/analyze TSLA — ניתוח מניה\n"
+        "/market — מצב שוק עכשיו\n"
+        "/watchlist — ניתוח רשימת מעקב\n"
+        "/add NVDA — הוסף לרשימה\n"
+        "/remove NVDA — הסר מרשימה\n"
+        "/setstop 7 — עדכן Stop Loss\n"
+        "/settings — הגדרות נוכחיות\n\n"
+        "או פשוט כתוב כל שאלה חופשית\n\n"
+        "אזהרה: חינוך פיננסי בלבד"
     )
 
 async def cmd_morning(u: Update, _):
-    m = await u.message.reply_text("⏳ מושך נתונים...")
+    m = await u.message.reply_text("מושך נתונים...")
     try:
         market  = await fetch_market()
         ep      = await fetch_episode()
@@ -178,15 +167,15 @@ async def cmd_morning(u: Update, _):
         )
         now = datetime.now(TZ).strftime("%d/%m/%Y %H:%M")
         txt = (
-            f"📈 *סיכום בוקר — {now}*\n\n"
-            f"📊 *שוק*\n{market}\n\n"
-            f"🎬 *{ep['title']}*\n\n{summary}\n\n"
-            f"[▶ לסרטון]({ep['link']})\n\n"
-            f"_⚠️ חינוך פיננסי בלבד_"
+            f"📈 סיכום בוקר — {now}\n\n"
+            f"📊 שוק\n{market}\n\n"
+            f"🎬 {ep['title']}\n\n{summary}\n\n"
+            f"לסרטון: {ep['link']}\n\n"
+            f"אזהרה: חינוך פיננסי בלבד"
         )
-        await m.edit_text(txt, parse_mode="Markdown", disable_web_page_preview=True)
+        await m.edit_text(txt)
     except Exception as e:
-        await m.edit_text(f"⚠️ שגיאה: {e}")
+        await m.edit_text(f"שגיאה: {e}")
 
 async def cmd_analyze(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
@@ -194,43 +183,40 @@ async def cmd_analyze(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     ticker = ctx.args[0].upper()
     extra  = " ".join(ctx.args[1:])
-    m = await u.message.reply_text(f"🔍 מנתח {ticker}...")
+    m = await u.message.reply_text(f"מנתח {ticker}...")
     try:
         q = f"נתח לי את {ticker}"
         if extra:
             q += f" — {extra}"
         q += ". כלול ניתוח טכני, פונדמנטלי, Stop Loss ו-Target."
         result = await gemini(q)
-        await m.edit_text(f"📊 *ניתוח {ticker}*\n\n{result}", parse_mode="Markdown")
+        await m.edit_text(f"ניתוח {ticker}\n\n{result}")
     except Exception as e:
-        await m.edit_text(f"⚠️ שגיאה: {e}")
+        await m.edit_text(f"שגיאה: {e}")
 
 async def cmd_market(u: Update, _):
-    m = await u.message.reply_text("⏳ שולף...")
+    m = await u.message.reply_text("שולף...")
     try:
         market = await fetch_market()
         now    = datetime.now(TZ).strftime("%H:%M")
-        await m.edit_text(f"📊 *מצב שוק — {now}*\n\n{market}", parse_mode="Markdown")
+        await m.edit_text(f"מצב שוק — {now}\n\n{market}")
     except Exception as e:
-        await m.edit_text(f"⚠️ שגיאה: {e}")
+        await m.edit_text(f"שגיאה: {e}")
 
 async def cmd_watchlist(u: Update, _):
     wl = STATE["watchlist"]
     if not wl:
         await u.message.reply_text("הרשימה ריקה. הוסף עם /add TSLA")
         return
-    m = await u.message.reply_text("⏳ מנתח...")
+    m = await u.message.reply_text("מנתח...")
     try:
         result = await gemini(
             f"נתח בקצרה (2 שורות לכל מניה) את: {', '.join(wl)}. "
             f"לכל אחת: מגמה, מיקום ביחס ל-MA150, המלצה."
         )
-        await m.edit_text(
-            f"👀 *רשימת מעקב: {', '.join(wl)}*\n\n{result}",
-            parse_mode="Markdown"
-        )
+        await m.edit_text(f"רשימת מעקב: {', '.join(wl)}\n\n{result}")
     except Exception as e:
-        await m.edit_text(f"⚠️ שגיאה: {e}")
+        await m.edit_text(f"שגיאה: {e}")
 
 async def cmd_add(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
@@ -240,9 +226,7 @@ async def cmd_add(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if t not in STATE["watchlist"]:
         STATE["watchlist"].append(t)
         save_state(STATE)
-    await u.message.reply_text(
-        f"✅ {t} נוספה.\nרשימה: {', '.join(STATE['watchlist'])}"
-    )
+    await u.message.reply_text(f"{t} נוספה.\nרשימה: {', '.join(STATE['watchlist'])}")
 
 async def cmd_remove(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
@@ -252,7 +236,7 @@ async def cmd_remove(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if t in STATE["watchlist"]:
         STATE["watchlist"].remove(t)
         save_state(STATE)
-        await u.message.reply_text(f"🗑 {t} הוסרה.")
+        await u.message.reply_text(f"{t} הוסרה.")
     else:
         await u.message.reply_text(f"{t} לא נמצאת ברשימה.")
 
@@ -264,30 +248,29 @@ async def cmd_setstop(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         v = float(ctx.args[0])
         STATE["stop_loss"] = v
         save_state(STATE)
-        await u.message.reply_text(f"✅ Stop Loss עודכן ל-{v}%")
+        await u.message.reply_text(f"Stop Loss עודכן ל-{v}%")
     except ValueError:
         await u.message.reply_text("ערך לא תקין.")
 
 async def cmd_settings(u: Update, _):
     s = STATE
     await u.message.reply_text(
-        f"⚙️ *הגדרות*\n\n"
-        f"Stop Loss: {s.get('stop_loss',7)}%\n"
-        f"רשימת מעקב: {', '.join(s.get('watchlist',[]))}\n\n"
-        f"לשינוי: /setstop /add /remove",
-        parse_mode="Markdown"
+        f"הגדרות\n\n"
+        f"Stop Loss: {s.get('stop_loss', 7)}%\n"
+        f"רשימת מעקב: {', '.join(s.get('watchlist', []))}\n\n"
+        f"לשינוי: /setstop /add /remove"
     )
 
 async def handle_msg(u: Update, _):
     txt = u.message.text.strip()
     if not txt:
         return
-    m = await u.message.reply_text("🤔 מעבד...")
+    m = await u.message.reply_text("מעבד...")
     try:
         result = await gemini(txt)
         await m.edit_text(result[:4000])
     except Exception as e:
-        await m.edit_text(f"⚠️ שגיאה: {e}")
+        await m.edit_text(f"שגיאה: {e}")
 
 # ── main ─────────────────────────────────────────────────────
 def main():
@@ -311,7 +294,7 @@ def main():
     )
     scheduler.start()
 
-    log.info(f"🤖 בוט עולה | שליחה יומית ב-{SEND_HOUR}:00")
+    log.info(f"בוט עולה | שליחה יומית ב-{SEND_HOUR}:00")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
