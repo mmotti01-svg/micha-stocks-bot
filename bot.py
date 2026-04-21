@@ -32,7 +32,7 @@ async def gemini(prompt: str) -> str:
         r = await c.post(GEMINI_URL, json=body)
         data = r.json()
         if "candidates" not in data:
-            return f"שגיאה: {data.get('error', {}).get('message', 'unknown')}"
+            return f"שגיאה מ-Gemini: {json.dumps(data, ensure_ascii=False)}"
         return data["candidates"][0]["content"]["parts"][0]["text"]"
 PODCAST_RSS = "https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Ffeeds.buzzsprout.com%2F2299778.rss"
 YAHOO_URL   = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=2d"
